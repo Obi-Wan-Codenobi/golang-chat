@@ -3,13 +3,26 @@ package main
 import (
 	"fmt"
 	"net"
+	"time"
 )
 
-func handleConnection(client net.Conn) {
-	defer client.Close()
+type numberOfConnections struct {
+	count       int
+	updateCount chan int
+}
 
-	// copied example:
-	// Example of reading and writing to the connection
+func (c *numberOfConnections) countConnections() {
+	for {
+		// thread to update the count from the channel/pipe
+		newCount := <-c.updateCount
+		c.count = newCount
+	}
+}
+
+func handleConnection(client net.Conn, c *numberOfConnections) {
+	defer client.Close()
+	c.updateCount <- c.count + 1
+
 	buffer := make([]byte, 1024)
 	n, err := client.Read(buffer)
 	if err != nil {
@@ -17,8 +30,11 @@ func handleConnection(client net.Conn) {
 		return
 	}
 
+	time.Sleep(15 * time.Second)
+
 	// Echo the data back to the client
 	_, err = client.Write(buffer[:n])
+	c.updateCount <- c.count - 1
 	if err != nil {
 		fmt.Println("Error writing:", err)
 		return
@@ -38,7 +54,7 @@ func createSocket() (net.Listener, error) {
 	return socket, nil
 }
 
-func acceptConnection(socket net.Listener) {
+func acceptConnection(socket net.Listener, c *numberOfConnections) {
 	var client net.Conn
 	var err error
 
@@ -49,7 +65,7 @@ func acceptConnection(socket net.Listener) {
 			continue
 		}
 
-		go handleConnection(client)
+		go handleConnection(client, c)
 
 	}
 
@@ -65,6 +81,23 @@ func main() {
 		return
 	}
 
-	acceptConnection(socket)
+	// Makes channels
+	c := &numberOfConnections{
+		// This is essentially making the pipe for the threads to talk
+		updateCount: make(chan int),
+	}
+	//checking count channel and updating
+	go c.countConnections()
+
+	go acceptConnection(socket, c)
+
+	for {
+		time.Sleep(5 * time.Second)
+		//This may not be the best method to keep count since
+		//	multiple threads update this value. Using a mutex
+		//	would be better but I wanted to use routines to 
+		//	get familar
+		fmt.Println("Number of Active Connections:", c.count)
+	}
 
 }
